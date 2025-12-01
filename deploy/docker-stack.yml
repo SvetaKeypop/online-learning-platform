@@ -1,0 +1,97 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    volumes:
+      - pgdata_auth:/var/lib/postgresql/data
+      - ../postgres-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+    deploy:
+      replicas: 1
+      placement:
+        max_replicas_per_node: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        reservations:
+          memory: 128M
+
+  auth-service:
+    image: nvzhn/coderror-auth-service:latest
+    environment:
+      DATABASE_URL: postgresql://admin:password@postgres:5432/auth_db
+      SECRET_KEY: "super-secret-change-me"
+      JWT_ALGORITHM: "HS256"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+    networks:
+      - backend
+      - frontend
+    deploy:
+      replicas: 2          # кластер из двух экземпляров
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+
+  courses-service:
+    image: nvzhn/coderror-courses-service:latest
+    environment:
+      DATABASE_URL: postgresql://admin:password@postgres:5432/courses_db
+      SECRET_KEY: "super-secret-change-me"
+      JWT_ALGORITHM: "HS256"
+    networks:
+      - backend
+      - frontend
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+
+  progress-service:
+    image: nvzhn/coderror-progress-service:latest
+    environment:
+      DATABASE_URL: postgresql://admin:password@postgres:5432/progress_db
+      SECRET_KEY: "super-secret-change-me"
+      JWT_ALGORITHM: "HS256"
+    networks:
+      - backend
+      - frontend
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+
+  frontend:
+    image: nvzhn/coderror-frontend:latest
+    ports:
+      - "8080:80"
+    networks:
+      - frontend
+    deploy:
+      replicas: 2              # несколько экземпляров nginx
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 2
+        order: start-first
+
+networks:
+  backend:
+    driver: overlay
+  frontend:
+    driver: overlay
+
+volumes:
+  pgdata_auth:

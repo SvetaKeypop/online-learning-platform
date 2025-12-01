@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Курс — codERROR</title>
+  <link rel="stylesheet" href="style.css" />
+  <script defer src="app.js"></script>
+</head>
+<body data-page="course">
+  <div class="app-shell">
+    <header>
+      <div class="brand">
+        <div class="brand-title" id="course-title">Курс</div>
+        <div class="brand-subtitle">Подробности курса и уроки</div>
+      </div>
+      <nav>
+        <a href="index.html" class="nav-link">Курсы</a>
+        <a href="progress.html" class="nav-link">Мой прогресс</a>
+      </nav>
+    </header>
+
+    <div id="current-user" class="status-bar"></div>
+
+    <main>
+      <section class="card">
+        <div class="card-title">Уроки курса</div>
+        <div class="card-subtitle">Отмечайте просмотренные уроки, чтобы следить за своим прогрессом</div>
+        <div id="lessons-list" class="list"></div>
+        <div id="course-info" class="status-bar"></div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

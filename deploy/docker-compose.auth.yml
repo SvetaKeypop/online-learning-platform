@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_auth:/var/lib/postgresql/data
+      - ../postgres-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-service:
+    build:
+      context: ../auth-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://admin:password@postgres:5432/auth_db
+      SECRET_KEY: "super-secret-change-me"
+      JWT_ALGORITHM: "HS256"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  courses-service:
+    build:
+      context: ../courses-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://admin:password@postgres:5432/courses_db
+      SECRET_KEY: "super-secret-change-me"
+      JWT_ALGORITHM: "HS256"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+
+  progress-service:
+    build:
+      context: ../progress-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://admin:password@postgres:5432/progress_db
+      SECRET_KEY: "super-secret-change-me"
+      JWT_ALGORITHM: "HS256"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - auth-service
+      - courses-service
+      - progress-service
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata_auth:

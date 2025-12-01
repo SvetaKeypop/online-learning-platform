@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>codERROR — онлайн-курсы по программированию</title>
+  <link rel="stylesheet" href="style.css" />
+  <script defer src="app.js"></script>
+</head>
+<body data-page="index">
+  <div class="app-shell">
+    <header>
+      <div class="brand">
+        <div class="brand-title">codERROR</div>
+        <div class="brand-subtitle">Онлайн-курсы по программированию</div>
+      </div>
+      <nav>
+        <a href="index.html" class="nav-link active">Курсы</a>
+        <a href="progress.html" class="nav-link">Мой прогресс</a>
+      </nav>
+    </header>
+
+    <div id="current-user" class="status-bar"></div>
+
+    <main>
+      <section class="card">
+        <div class="card-title">Вход в аккаунт</div>
+        <div class="card-subtitle">Авторизуйтесь, чтобы продолжить обучение</div>
+
+        <form id="login-form" class="form">
+          <div>
+            <div class="label">Email</div>
+            <input class="input" type="email" name="email" placeholder="user@example.com" required />
+          </div>
+          <div>
+            <div class="label">Пароль</div>
+            <input class="input" type="password" name="password" placeholder="••••••••" required />
+          </div>
+          <div class="button-row">
+            <button class="btn" type="submit">Войти</button>
+          </div>
+        </form>
+
+        <hr style="border:none; border-top:1px solid rgba(148,163,184,0.3); margin:14px 0;" />
+
+        <div class="card-title" style="font-size:16px;">Нет аккаунта?</div>
+        <div class="card-subtitle">Зарегистрируйтесь за пару секунд и начните учиться</div>
+
+        <form id="register-form" class="form">
+          <div>
+            <div class="label">Email</div>
+            <input class="input" type="email" name="email" placeholder="newuser@example.com" required />
+          </div>
+          <div>
+            <div class="label">Пароль</div>
+            <input class="input" type="password" name="password" placeholder="минимум 6 символов" required />
+          </div>
+          <div class="button-row">
+            <button class="btn-outline btn" type="submit">Создать аккаунт</button>
+          </div>
+        </form>
+
+        <div id="auth-status" class="status-bar"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Курсы</div>
+        <div class="card-subtitle">Выберите курс, который хотите пройти</div>
+        <div id="courses-list" class="list"></div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

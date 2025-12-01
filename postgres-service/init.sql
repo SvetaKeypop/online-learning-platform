@@ -1,0 +1,3 @@
+CREATE DATABASE auth_db;
+CREATE DATABASE courses_db;
+CREATE DATABASE progress_db;
