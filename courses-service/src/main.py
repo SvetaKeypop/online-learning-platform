@@ -1,14 +1,12 @@
 from fastapi import FastAPI
-from sqlalchemy import text
+from sqlalchemy import text, select, insert
 
 from .infrastructure.db import engine, SessionLocal
-from .infrastructure.models import Base, CourseORM, LessonORM
+from .infrastructure.models import Base
 from .interfaces.http.routers import courses as courses_router
 
 app = FastAPI(title="Courses Service", version="0.1.0")
 
-
-#Демо-данные для автоматического заполнения БД
 COURSES_DATA = [
     {
         "title": "Основы Python",
@@ -68,26 +66,40 @@ COURSES_DATA = [
 
 
 def seed_demo_data() -> None:
+    meta = Base.metadata
+
+    if "courses" not in meta.tables:
+        return
+
+    courses_table = meta.tables["courses"]
+    lessons_table = meta.tables.get("lessons") 
+
     db = SessionLocal()
     try:
-        if db.query(CourseORM).first():
+        exists = db.execute(select(courses_table.c.id).limit(1)).first()
+        if exists:
             return
 
         for course_spec in COURSES_DATA:
-            course = CourseORM(
-                title=course_spec["title"],
-                description=course_spec["description"],
-            )
-            db.add(course)
-            db.flush()
-
-            for lesson_spec in course_spec["lessons"]:
-                lesson = LessonORM(
-                    course_id=course.id,
-                    title=lesson_spec["title"],
-                    content=lesson_spec["content"],
+            result = db.execute(
+                insert(courses_table)
+                .values(
+                    title=course_spec["title"],
+                    description=course_spec["description"],
                 )
-                db.add(lesson)
+                .returning(courses_table.c.id)
+            )
+            course_id = result.scalar_one()
+
+            if lessons_table is not None:
+                for lesson_spec in course_spec["lessons"]:
+                    db.execute(
+                        insert(lessons_table).values(
+                            course_id=course_id,
+                            title=lesson_spec["title"],
+                            content=lesson_spec["content"],
+                        )
+                    )
 
         db.commit()
     finally:
