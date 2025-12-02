@@ -9,6 +9,7 @@ on:
 env:
   IMAGE_PREFIX: ${{ secrets.DOCKERHUB_USERNAME }}/coderror
 
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -84,25 +85,15 @@ jobs:
             ${{ env.IMAGE_PREFIX }}-frontend:latest
 
   deploy:
-    needs: build-and-push
-    runs-on: self-hosted
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    env:
-      IMAGE_PREFIX: ${{ secrets.DOCKERHUB_USERNAME }}/coderror
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  needs: build-and-push
+  runs-on: self-hosted
 
-      - name: Login to Docker Hub on swarm node
-        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+  steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
 
-      - name: Pull latest images
-        run: |
-          docker pull $IMAGE_PREFIX-auth-service:latest
-          docker pull $IMAGE_PREFIX-courses-service:latest
-          docker pull $IMAGE_PREFIX-progress-service:latest
-          docker pull $IMAGE_PREFIX-frontend:latest
+    - name: Deploy to Docker Swarm
+      run: |
+        echo "Запускаю деплой стека coderror..."
+        docker stack deploy -c deploy/docker-stack.yml coderror
 
-      - name: Deploy stack to Swarm
-        run: |
-          docker stack deploy -c deploy/docker-stack.yml coderror
