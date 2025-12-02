@@ -2,20 +2,23 @@ name: CI/CD codERROR
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-
-env:
-  IMAGE_PREFIX: ${{ secrets.DOCKERHUB_USERNAME }}/coderror
-
+    branches:
+      - main
 
 jobs:
+  #Тесты для всех трёх Python-сервисов
   tests:
+    name: tests (${{ matrix.service }})
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         service: [auth-service, courses-service, progress-service]
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,24 +26,27 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Install dependencies
-        working-directory: ${{ matrix.service }}
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          pip install -r requirements.txt pytest httpx
 
       - name: Run tests
-        working-directory: ${{ matrix.service }}
         run: pytest -q
 
+  #Сборка и push образов на Docker Hub
   build-and-push:
     needs: tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -52,48 +58,52 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./auth-service
-          file: ./auth-service/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-auth-service:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/coderror-auth-service:latest
 
       - name: Build and push courses-service
         uses: docker/build-push-action@v6
         with:
           context: ./courses-service
-          file: ./courses-service/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-courses-service:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/coderror-courses-service:latest
 
       - name: Build and push progress-service
         uses: docker/build-push-action@v6
         with:
           context: ./progress-service
-          file: ./progress-service/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-progress-service:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/coderror-progress-service:latest
 
       - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
-          file: ./frontend/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-frontend:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/coderror-frontend:latest
 
+  #Deploy через локальный self-hosted runner
   deploy:
-  needs: build-and-push
-  runs-on: self-hosted
+    needs: build-and-push
+    runs-on: [self-hosted, Windows, X64]
 
-  steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Deploy to Docker Swarm
-      run: |
-        echo "Запускаю деплой стека coderror..."
-        docker stack deploy -c deploy/docker-stack.yml coderror
+      - name: Pull latest images from Docker Hub
+        shell: pwsh
+        run: |
+          docker pull $env:DOCKERHUB_USERNAME/coderror-auth-service:latest
+          docker pull $env:DOCKERHUB_USERNAME/coderror-courses-service:latest
+          docker pull $env:DOCKERHUB_USERNAME/coderror-progress-service:latest
+          docker pull $env:DOCKERHUB_USERNAME/coderror-frontend:latest
 
+      - name: Deploy stack coderror
+        shell: pwsh
+        run: |
+          docker stack deploy -c deploy/docker-stack.yml coderror
