@@ -95,15 +95,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Pull latest images from Docker Hub
-        shell: pwsh
+      - name: Login to Docker Hub (for deploy)
+        shell: powershell
         run: |
-          docker pull $env:DOCKERHUB_USERNAME/coderror-auth-service:latest
-          docker pull $env:DOCKERHUB_USERNAME/coderror-courses-service:latest
-          docker pull $env:DOCKERHUB_USERNAME/coderror-progress-service:latest
-          docker pull $env:DOCKERHUB_USERNAME/coderror-frontend:latest
+          docker login `
+            -u "${{ secrets.DOCKERHUB_USERNAME }}" `
+            -p "${{ secrets.DOCKERHUB_TOKEN }}"
+
+      - name: Pull latest images from Docker Hub
+        shell: powershell
+        run: |
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-auth-service:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-courses-service:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-progress-service:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-frontend:latest
 
       - name: Deploy stack coderror
-        shell: pwsh
+        shell: powershell
         run: |
           docker stack deploy -c deploy/docker-stack.yml coderror
+
