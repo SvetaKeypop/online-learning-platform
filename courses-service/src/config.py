@@ -1,10 +1,13 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field
+
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = Field(...)
-    SECRET_KEY: str = Field(...)
-    JWT_ALGORITHM: str = "HS256"
-    class Config: env_file = ".env"; extra = "ignore"
+    DATABASE_URL: str = "sqlite:///./courses.db"
+    SECRET_KEY: str = "dev-secret-courses"
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
 
 settings = Settings()

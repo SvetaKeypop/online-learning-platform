@@ -1,12 +1,13 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field
+
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = Field(...)
-    SECRET_KEY: str = Field(...)
-    JWT_ALGORITHM: str = "HS256"
+    DATABASE_URL: str = "sqlite:///./progress.db"
+    SECRET_KEY: str = "dev-secret-progress"
+
     class Config:
         env_file = ".env"
-        extra = "ignore"
+        env_file_encoding = "utf-8"
+
 
 settings = Settings()
