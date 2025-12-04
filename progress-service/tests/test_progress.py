@@ -11,14 +11,13 @@ if SERVICE_ROOT not in sys.path:
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from src.main import app
 from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
 
 # Тестовая БД в памяти
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test_progress.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 def override_get_db():
     try:
@@ -27,13 +26,26 @@ def override_get_db():
     finally:
         db.close()
 
+# Переопределяем engine в infrastructure.db и main.py для тестов
+import src.infrastructure.db
+import src.main
+src.infrastructure.db.engine = test_engine
+src.main.engine = test_engine
+src.infrastructure.db.SessionLocal = TestingSessionLocal
+
+# Импортируем app после переопределения engine
+from src.main import app
+
 app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 def client():
-    Base.metadata.create_all(bind=engine)
+    # Создаем таблицы перед каждым тестом на тестовом engine
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
     yield TestClient(app)
-    Base.metadata.drop_all(bind=engine)
+    # Очищаем после теста
+    Base.metadata.drop_all(bind=test_engine)
 
 @pytest.fixture
 def mock_user_email():
@@ -98,8 +110,8 @@ def test_my_progress_empty(mock_user, client, mock_user_email):
     )
     assert response.status_code == 200
     data = response.json()
-    assert "items" in data
-    assert len(data["items"]) == 0
+    assert isinstance(data, list)
+    assert len(data) == 0
 
 @patch('src.interfaces.http.routers.progress.get_user_email')
 def test_my_progress_with_completed(mock_user, client, mock_user_email):
@@ -120,8 +132,8 @@ def test_my_progress_with_completed(mock_user, client, mock_user_email):
     )
     assert response.status_code == 200
     data = response.json()
-    assert "items" in data
-    assert len(data["items"]) == 3
+    assert isinstance(data, list)
+    assert len(data) == 3
 
 @patch('src.interfaces.http.routers.progress.get_user_email')
 def test_my_progress_pagination(mock_user, client, mock_user_email):
@@ -142,7 +154,8 @@ def test_my_progress_pagination(mock_user, client, mock_user_email):
     )
     assert response.status_code == 200
     data = response.json()
-    assert len(data["items"]) == 10
+    assert isinstance(data, list)
+    assert len(data) == 10
     
     # Получаем вторую страницу
     response = client.get(
@@ -151,7 +164,8 @@ def test_my_progress_pagination(mock_user, client, mock_user_email):
     )
     assert response.status_code == 200
     data = response.json()
-    assert len(data["items"]) == 4
+    assert isinstance(data, list)
+    assert len(data) == 4
 
 def test_complete_lesson_unauthorized(client):
     """Тест завершения урока без авторизации"""

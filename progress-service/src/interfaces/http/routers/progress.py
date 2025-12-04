@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
-from ....infrastructure.db import get_db
+from ....infrastructure.db import get_db, engine
 from ....infrastructure.models import Progress
 from ..authz import get_user_email
 from ..schemas import ProgressItem, CompleteResp
@@ -19,8 +20,14 @@ def complete_lesson(
     db: Session = Depends(get_db),
 ):
     # идемпотентный UPSERT: если запись уже есть — "ничего не делаем"
-    stmt = insert(Progress).values(user_email=user_email, lesson_id=lesson_id)
-    stmt = stmt.on_conflict_do_nothing(index_elements=["user_email", "lesson_id"])
+    # Используем правильный insert в зависимости от типа БД
+    if engine.dialect.name == "postgresql":
+        stmt = pg_insert(Progress).values(user_email=user_email, lesson_id=lesson_id)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["user_email", "lesson_id"])
+    else:
+        # SQLite
+        stmt = sqlite_insert(Progress).values(user_email=user_email, lesson_id=lesson_id)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["user_email", "lesson_id"])
     db.execute(stmt)
     db.commit()
     return CompleteResp(ok=True, lesson_id=lesson_id)
