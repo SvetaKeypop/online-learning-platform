@@ -121,12 +121,11 @@ def test_my_progress_empty(client, user_email_override, mock_db):
 
 def test_my_progress_with_completed(client, user_email_override, mock_db):
     """Тест получения прогресса с завершенными уроками"""
-    # Мокируем результат запроса - 3 записи
-    from unittest.mock import Mock
+    # Мокируем результат запроса - 3 записи как кортежи (lesson_id, completed_at)
     mock_rows = [
-        Mock(lesson_id=3, completed_at=datetime(2025, 12, 4, 23, 30, 0)),
-        Mock(lesson_id=2, completed_at=datetime(2025, 12, 4, 23, 29, 0)),
-        Mock(lesson_id=1, completed_at=datetime(2025, 12, 4, 23, 28, 0)),
+        (3, datetime(2025, 12, 4, 23, 30, 0)),
+        (2, datetime(2025, 12, 4, 23, 29, 0)),
+        (1, datetime(2025, 12, 4, 23, 28, 0)),
     ]
     mock_result = MagicMock()
     mock_result.all.return_value = mock_rows
@@ -143,9 +142,9 @@ def test_my_progress_with_completed(client, user_email_override, mock_db):
 
 def test_my_progress_pagination(client, user_email_override, mock_db):
     """Тест пагинации прогресса"""
-    # Мокируем результат для первой страницы - 10 записей
+    # Мокируем результат для первой страницы - 10 записей как кортежи
     mock_rows_page1 = [
-        Mock(lesson_id=i, completed_at=datetime(2025, 12, 4, 23, 30 - i, 0))
+        (i, datetime(2025, 12, 4, 23, 30 - i, 0))
         for i in range(14, 4, -1)
     ]
     mock_result_page1 = MagicMock()
@@ -161,9 +160,9 @@ def test_my_progress_pagination(client, user_email_override, mock_db):
     assert isinstance(data, list)
     assert len(data) == 10
     
-    # Мокируем результат для второй страницы - 4 записи
+    # Мокируем результат для второй страницы - 4 записи как кортежи
     mock_rows_page2 = [
-        Mock(lesson_id=i, completed_at=datetime(2025, 12, 4, 23, 30 - i, 0))
+        (i, datetime(2025, 12, 4, 23, 30 - i, 0))
         for i in range(4, 0, -1)
     ]
     mock_result_page2 = MagicMock()
