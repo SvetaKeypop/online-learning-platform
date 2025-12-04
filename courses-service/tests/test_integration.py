@@ -15,7 +15,7 @@ from src.main import app
 from src.infrastructure.models import Base, Course, Lesson
 from src.infrastructure.db import get_db
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test_integration.db"
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -30,25 +30,23 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 def client():
+    # Создаем таблицы перед каждым тестом
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield TestClient(app)
+    # Очищаем после теста
     Base.metadata.drop_all(bind=engine)
 
-@pytest.fixture
-def admin_token():
-    """Мок токена администратора"""
-    return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBleGFtcGxlLmNvbSIsInJvbGUiOiJhZG1pbiJ9.test"
-
-@patch('src.interfaces.http.routers.courses.require_admin')
-def test_full_course_lifecycle(mock_admin, client, admin_token):
+@patch('src.interfaces.http.authz.get_claims')
+def test_full_course_lifecycle(mock_get_claims, client):
     """Интеграционный тест полного жизненного цикла курса"""
-    mock_admin.return_value = {"sub": "admin@example.com", "role": "admin"}
+    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     
     # 1. Создаем курс
     create_response = client.post(
         "/api/courses",
         json={"title": "Python Basics", "description": "Learn Python"},
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert create_response.status_code == 201
     course_id = create_response.json()["id"]
@@ -64,7 +62,7 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     lesson1_response = client.post(
         f"/api/courses/{course_id}/lessons",
         json={"title": "Introduction", "content": "Welcome to Python", "order": 1},
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert lesson1_response.status_code == 201
     lesson1_id = lesson1_response.json()["id"]
@@ -72,7 +70,7 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     lesson2_response = client.post(
         f"/api/courses/{course_id}/lessons",
         json={"title": "Variables", "content": "Learn about variables", "order": 2},
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert lesson2_response.status_code == 201
     
@@ -88,7 +86,7 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     update_response = client.put(
         f"/api/courses/{course_id}/lessons/{lesson1_id}",
         json={"title": "Introduction Updated", "content": "Updated content"},
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert update_response.status_code == 200
     assert update_response.json()["title"] == "Introduction Updated"
@@ -97,7 +95,7 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     update_course_response = client.put(
         f"/api/courses/{course_id}",
         json={"title": "Python Basics Updated"},
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert update_course_response.status_code == 200
     assert update_course_response.json()["title"] == "Python Basics Updated"
@@ -105,7 +103,7 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     # 7. Удаляем урок
     delete_lesson_response = client.delete(
         f"/api/courses/{course_id}/lessons/{lesson1_id}",
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert delete_lesson_response.status_code == 204
     
@@ -116,7 +114,7 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     # 9. Удаляем курс
     delete_course_response = client.delete(
         f"/api/courses/{course_id}",
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
     assert delete_course_response.status_code == 204
     
@@ -124,17 +122,18 @@ def test_full_course_lifecycle(mock_admin, client, admin_token):
     final_list = client.get("/api/courses")
     assert not any(c["id"] == course_id for c in final_list.json())
 
-@patch('src.interfaces.http.routers.courses.require_admin')
-def test_course_with_multiple_lessons(mock_admin, client, admin_token):
+@patch('src.interfaces.http.authz.get_claims')
+def test_course_with_multiple_lessons(mock_get_claims, client):
     """Тест курса с множеством уроков"""
-    mock_admin.return_value = {"sub": "admin@example.com", "role": "admin"}
+    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     
     # Создаем курс
     course_response = client.post(
         "/api/courses",
         json={"title": "Advanced Course", "description": "Many lessons"},
-        headers={"Authorization": admin_token}
+        headers={"Authorization": "Bearer test"}
     )
+    assert course_response.status_code == 201
     course_id = course_response.json()["id"]
     
     # Создаем 10 уроков
@@ -143,7 +142,7 @@ def test_course_with_multiple_lessons(mock_admin, client, admin_token):
         lesson_response = client.post(
             f"/api/courses/{course_id}/lessons",
             json={"title": f"Lesson {i+1}", "content": f"Content {i+1}", "order": i+1},
-            headers={"Authorization": admin_token}
+            headers={"Authorization": "Bearer test"}
         )
         assert lesson_response.status_code == 201
         lesson_ids.append(lesson_response.json()["id"])

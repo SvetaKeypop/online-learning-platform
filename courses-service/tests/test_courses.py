@@ -16,7 +16,7 @@ from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
 
 # Тестовая БД в памяти
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -31,8 +31,11 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 def client():
+    # Создаем таблицы перед каждым тестом
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield TestClient(app)
+    # Очищаем после теста
     Base.metadata.drop_all(bind=engine)
 
 @pytest.fixture
@@ -50,24 +53,26 @@ def test_list_courses_with_pagination(client):
     """Тест пагинации курсов"""
     # Создаем тестовые данные через прямой доступ к БД
     from src.infrastructure.models import Course
-    db = next(override_get_db())
-    for i in range(15):
-        course = Course(title=f"Course {i}", description=f"Description {i}")
-        db.add(course)
-    db.commit()
-    db.close()
-    
-    # Тест первой страницы
-    response = client.get("/api/courses?limit=10&offset=0")
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 10
-    
-    # Тест второй страницы
-    response = client.get("/api/courses?limit=10&offset=10")
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 5
+    db = TestingSessionLocal()
+    try:
+        for i in range(15):
+            course = Course(title=f"Course {i}", description=f"Description {i}")
+            db.add(course)
+        db.commit()
+        
+        # Тест первой страницы
+        response = client.get("/api/courses?limit=10&offset=0")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 10
+        
+        # Тест второй страницы
+        response = client.get("/api/courses?limit=10&offset=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 5
+    finally:
+        db.close()
 
 def test_list_courses_invalid_pagination(client):
     """Тест невалидной пагинации"""
@@ -85,16 +90,18 @@ def test_get_course_lessons_not_found(client):
     response = client.get("/api/courses/999/lessons")
     assert response.status_code == 404
 
-def test_get_course_lessons_empty(client, admin_token):
+def test_get_course_lessons_empty(client):
     """Тест получения пустого списка уроков"""
     # Создаем курс
     from src.infrastructure.models import Course
-    db = next(override_get_db())
-    course = Course(title="Test Course", description="Test Description")
-    db.add(course)
-    db.commit()
-    course_id = course.id
-    db.close()
+    db = TestingSessionLocal()
+    try:
+        course = Course(title="Test Course", description="Test Description")
+        db.add(course)
+        db.commit()
+        course_id = course.id
+    finally:
+        db.close()
     
     response = client.get(f"/api/courses/{course_id}/lessons")
     assert response.status_code == 200
@@ -106,12 +113,13 @@ def test_create_course_unauthorized(client):
         "/api/courses",
         json={"title": "Test Course", "description": "Test Description"}
     )
-    assert response.status_code == 401
+    # HTTPBearer возвращает 403 если нет заголовка Authorization
+    assert response.status_code == 403
 
-@patch('src.interfaces.http.routers.courses.require_admin')
-def test_create_course(mock_admin, client):
+@patch('src.interfaces.http.authz.get_claims')
+def test_create_course(mock_get_claims, client):
     """Тест создания курса"""
-    mock_admin.return_value = {"sub": "admin@example.com", "role": "admin"}
+    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     
     response = client.post(
         "/api/courses",
@@ -124,26 +132,26 @@ def test_create_course(mock_admin, client):
     assert data["description"] == "Test Description"
     assert "id" in data
 
-def test_update_course_not_found(client, admin_token):
+@patch('src.interfaces.http.authz.get_claims')
+def test_update_course_not_found(mock_get_claims, client):
     """Тест обновления несуществующего курса"""
-    with patch('src.interfaces.http.routers.courses.require_admin') as mock_admin:
-        mock_admin.return_value = {"sub": "admin@example.com", "role": "admin"}
-        response = client.put(
-            "/api/courses/999",
-            json={"title": "Updated Title"},
-            headers={"Authorization": admin_token}
-        )
-        assert response.status_code == 404
+    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
+    response = client.put(
+        "/api/courses/999",
+        json={"title": "Updated Title"},
+        headers={"Authorization": "Bearer test"}
+    )
+    assert response.status_code == 404
 
-def test_delete_course_not_found(client, admin_token):
+@patch('src.interfaces.http.authz.get_claims')
+def test_delete_course_not_found(mock_get_claims, client):
     """Тест удаления несуществующего курса"""
-    with patch('src.interfaces.http.routers.courses.require_admin') as mock_admin:
-        mock_admin.return_value = {"sub": "admin@example.com", "role": "admin"}
-        response = client.delete(
-            "/api/courses/999",
-            headers={"Authorization": admin_token}
-        )
-        assert response.status_code == 404
+    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
+    response = client.delete(
+        "/api/courses/999",
+        headers={"Authorization": "Bearer test"}
+    )
+    assert response.status_code == 404
 
 def test_create_lesson_unauthorized(client):
     """Тест создания урока без авторизации"""
@@ -151,7 +159,8 @@ def test_create_lesson_unauthorized(client):
         "/api/courses/1/lessons",
         json={"title": "Test Lesson", "content": "Test Content", "order": 1}
     )
-    assert response.status_code == 401
+    # HTTPBearer возвращает 403 если нет заголовка Authorization
+    assert response.status_code == 403
 
 def test_metrics_endpoint(client):
     """Тест endpoint метрик"""
