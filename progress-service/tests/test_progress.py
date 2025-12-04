@@ -1,7 +1,6 @@
 import os
 import sys
 import pytest
-from unittest.mock import Mock, patch
 
 CURRENT_DIR = os.path.dirname(__file__)
 SERVICE_ROOT = os.path.dirname(CURRENT_DIR)
@@ -13,6 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
+from src.interfaces.http.authz import get_user_email
 
 # Тестовая БД в памяти
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
@@ -48,15 +48,18 @@ def client():
     Base.metadata.drop_all(bind=test_engine)
 
 @pytest.fixture
-def mock_user_email():
-    """Мок email пользователя"""
-    return "test@example.com"
-
-@patch('src.interfaces.http.routers.progress.get_user_email')
-def test_complete_lesson_success(mock_user, client, mock_user_email):
-    """Тест успешного завершения урока"""
-    mock_user.return_value = mock_user_email
+def user_email_override():
+    """Фикстура для переопределения get_user_email"""
+    def mock_get_user_email():
+        return "test@example.com"
     
+    app.dependency_overrides[get_user_email] = mock_get_user_email
+    yield
+    if get_user_email in app.dependency_overrides:
+        del app.dependency_overrides[get_user_email]
+
+def test_complete_lesson_success(client, user_email_override):
+    """Тест успешного завершения урока"""
     response = client.post(
         f"/api/progress/1/complete",
         headers={"Authorization": "Bearer test_token"}
@@ -66,10 +69,8 @@ def test_complete_lesson_success(mock_user, client, mock_user_email):
     assert data["ok"] is True
     assert data["lesson_id"] == 1
 
-@patch('src.interfaces.http.routers.progress.get_user_email')
-def test_complete_lesson_idempotent(mock_user, client, mock_user_email):
+def test_complete_lesson_idempotent(client, user_email_override):
     """Тест идемпотентности завершения урока"""
-    mock_user.return_value = mock_user_email
     
     # Первое завершение
     response1 = client.post(
@@ -86,10 +87,8 @@ def test_complete_lesson_idempotent(mock_user, client, mock_user_email):
     assert response2.status_code == 200
     assert response1.json() == response2.json()
 
-@patch('src.interfaces.http.routers.progress.get_user_email')
-def test_complete_multiple_lessons(mock_user, client, mock_user_email):
+def test_complete_multiple_lessons(client, user_email_override):
     """Тест завершения нескольких уроков"""
-    mock_user.return_value = mock_user_email
     
     # Завершаем несколько уроков
     for lesson_id in [1, 2, 3]:
@@ -99,10 +98,8 @@ def test_complete_multiple_lessons(mock_user, client, mock_user_email):
         )
         assert response.status_code == 200
 
-@patch('src.interfaces.http.routers.progress.get_user_email')
-def test_my_progress_empty(mock_user, client, mock_user_email):
+def test_my_progress_empty(client, user_email_override):
     """Тест получения пустого прогресса"""
-    mock_user.return_value = mock_user_email
     
     response = client.get(
         "/api/progress/my",
@@ -113,10 +110,8 @@ def test_my_progress_empty(mock_user, client, mock_user_email):
     assert isinstance(data, list)
     assert len(data) == 0
 
-@patch('src.interfaces.http.routers.progress.get_user_email')
-def test_my_progress_with_completed(mock_user, client, mock_user_email):
+def test_my_progress_with_completed(client, user_email_override):
     """Тест получения прогресса с завершенными уроками"""
-    mock_user.return_value = mock_user_email
     
     # Завершаем несколько уроков
     for lesson_id in [1, 2, 3]:
@@ -135,10 +130,8 @@ def test_my_progress_with_completed(mock_user, client, mock_user_email):
     assert isinstance(data, list)
     assert len(data) == 3
 
-@patch('src.interfaces.http.routers.progress.get_user_email')
-def test_my_progress_pagination(mock_user, client, mock_user_email):
+def test_my_progress_pagination(client, user_email_override):
     """Тест пагинации прогресса"""
-    mock_user.return_value = mock_user_email
     
     # Завершаем много уроков
     for lesson_id in range(1, 15):
