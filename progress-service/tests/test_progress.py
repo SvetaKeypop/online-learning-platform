@@ -33,10 +33,20 @@ src.infrastructure.db.engine = test_engine
 src.main.engine = test_engine
 src.infrastructure.db.SessionLocal = TestingSessionLocal
 
+# Переопределяем engine в роутере тоже
+import src.interfaces.http.routers.progress
+src.interfaces.http.routers.progress.engine = test_engine
+
 # Импортируем app после переопределения engine
 from src.main import app
 
 app.dependency_overrides[get_db] = override_get_db
+
+# Переопределяем on_startup чтобы использовать тестовый engine
+@app.on_event("startup")
+def test_on_startup():
+    # Используем тестовый engine
+    Base.metadata.create_all(bind=test_engine)
 
 @pytest.fixture(scope="function")
 def client():
