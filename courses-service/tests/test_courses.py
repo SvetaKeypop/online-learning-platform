@@ -11,14 +11,14 @@ if SERVICE_ROOT not in sys.path:
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from src.main import app
 from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
+from src.interfaces.http.authz import require_admin
 
 # Тестовая БД в памяти
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 def override_get_db():
     try:
@@ -27,16 +27,43 @@ def override_get_db():
     finally:
         db.close()
 
+# Переопределяем engine в infrastructure.db и main.py для тестов
+import src.infrastructure.db
+import src.main
+src.infrastructure.db.engine = test_engine
+src.main.engine = test_engine
+src.infrastructure.db.SessionLocal = TestingSessionLocal
+
+# Импортируем app после переопределения engine
+from src.main import app
+
 app.dependency_overrides[get_db] = override_get_db
+
+# Переопределяем on_startup чтобы использовать тестовый engine
+@app.on_event("startup")
+def test_on_startup():
+    # Используем тестовый engine
+    Base.metadata.create_all(bind=test_engine)
 
 @pytest.fixture(scope="function")
 def client():
-    # Создаем таблицы перед каждым тестом
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    # Создаем таблицы перед каждым тестом на тестовом engine
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
     yield TestClient(app)
     # Очищаем после теста
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=test_engine)
+
+@pytest.fixture
+def admin_override():
+    """Фикстура для переопределения require_admin"""
+    def mock_require_admin():
+        return {"sub": "admin@example.com", "role": "admin"}
+    
+    app.dependency_overrides[require_admin] = mock_require_admin
+    yield
+    if require_admin in app.dependency_overrides:
+        del app.dependency_overrides[require_admin]
 
 @pytest.fixture
 def admin_token():
@@ -59,6 +86,7 @@ def test_list_courses_with_pagination(client):
             course = Course(title=f"Course {i}", description=f"Description {i}")
             db.add(course)
         db.commit()
+        db.close()
         
         # Тест первой страницы
         response = client.get("/api/courses?limit=10&offset=0")
@@ -100,8 +128,10 @@ def test_get_course_lessons_empty(client):
         db.add(course)
         db.commit()
         course_id = course.id
-    finally:
         db.close()
+    except:
+        db.close()
+        raise
     
     response = client.get(f"/api/courses/{course_id}/lessons")
     assert response.status_code == 200
@@ -116,11 +146,8 @@ def test_create_course_unauthorized(client):
     # HTTPBearer возвращает 403 если нет заголовка Authorization
     assert response.status_code == 403
 
-@patch('src.interfaces.http.authz.get_claims')
-def test_create_course(mock_get_claims, client):
+def test_create_course(client, admin_override):
     """Тест создания курса"""
-    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
-    
     response = client.post(
         "/api/courses",
         json={"title": "Test Course", "description": "Test Description"},
@@ -132,10 +159,8 @@ def test_create_course(mock_get_claims, client):
     assert data["description"] == "Test Description"
     assert "id" in data
 
-@patch('src.interfaces.http.authz.get_claims')
-def test_update_course_not_found(mock_get_claims, client):
+def test_update_course_not_found(client, admin_override):
     """Тест обновления несуществующего курса"""
-    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     response = client.put(
         "/api/courses/999",
         json={"title": "Updated Title"},
@@ -143,10 +168,8 @@ def test_update_course_not_found(mock_get_claims, client):
     )
     assert response.status_code == 404
 
-@patch('src.interfaces.http.authz.get_claims')
-def test_delete_course_not_found(mock_get_claims, client):
+def test_delete_course_not_found(client, admin_override):
     """Тест удаления несуществующего курса"""
-    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     response = client.delete(
         "/api/courses/999",
         headers={"Authorization": "Bearer test"}

@@ -11,13 +11,13 @@ if SERVICE_ROOT not in sys.path:
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from src.main import app
 from src.infrastructure.models import Base, Course, Lesson
 from src.infrastructure.db import get_db
+from src.interfaces.http.authz import require_admin
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 def override_get_db():
     try:
@@ -26,21 +26,40 @@ def override_get_db():
     finally:
         db.close()
 
+# Переопределяем engine в infrastructure.db и main.py для тестов
+import src.infrastructure.db
+import src.main
+src.infrastructure.db.engine = test_engine
+src.main.engine = test_engine
+src.infrastructure.db.SessionLocal = TestingSessionLocal
+
+# Импортируем app после переопределения engine
+from src.main import app
+
 app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 def client():
     # Создаем таблицы перед каждым тестом
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
     yield TestClient(app)
     # Очищаем после теста
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=test_engine)
 
-@patch('src.interfaces.http.authz.get_claims')
-def test_full_course_lifecycle(mock_get_claims, client):
+@pytest.fixture
+def admin_override():
+    """Фикстура для переопределения require_admin"""
+    def mock_require_admin():
+        return {"sub": "admin@example.com", "role": "admin"}
+    
+    app.dependency_overrides[require_admin] = mock_require_admin
+    yield
+    if require_admin in app.dependency_overrides:
+        del app.dependency_overrides[require_admin]
+
+def test_full_course_lifecycle(client, admin_override):
     """Интеграционный тест полного жизненного цикла курса"""
-    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     
     # 1. Создаем курс
     create_response = client.post(
@@ -122,10 +141,8 @@ def test_full_course_lifecycle(mock_get_claims, client):
     final_list = client.get("/api/courses")
     assert not any(c["id"] == course_id for c in final_list.json())
 
-@patch('src.interfaces.http.authz.get_claims')
-def test_course_with_multiple_lessons(mock_get_claims, client):
+def test_course_with_multiple_lessons(client, admin_override):
     """Тест курса с множеством уроков"""
-    mock_get_claims.return_value = {"sub": "admin@example.com", "role": "admin"}
     
     # Создаем курс
     course_response = client.post(
