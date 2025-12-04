@@ -11,15 +11,15 @@ if SERVICE_ROOT not in sys.path:
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from src.main import app
 from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
 from src.infrastructure.security import PasswordHasher
+from src.interfaces.http.routers.auth import get_limiter
 
 # Тестовая БД в памяти
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test_auth.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 def override_get_db():
     try:
@@ -28,13 +28,42 @@ def override_get_db():
     finally:
         db.close()
 
+# Переопределяем engine в infrastructure.db и main.py для тестов
+import src.infrastructure.db
+import src.main
+src.infrastructure.db.engine = test_engine
+src.main.engine = test_engine
+src.infrastructure.db.SessionLocal = TestingSessionLocal
+
+# Импортируем app после переопределения engine
+from src.main import app
+
 app.dependency_overrides[get_db] = override_get_db
+
+# Отключаем rate limiting в тестах
+def override_get_limiter():
+    from slowapi import Limiter
+    from unittest.mock import MagicMock
+    # Создаем mock limiter, который ничего не делает
+    mock_limiter = MagicMock()
+    # Переопределяем метод limit чтобы он возвращал декоратор, который ничего не делает
+    def noop_limit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    mock_limiter.limit = noop_limit
+    return mock_limiter
+
+app.dependency_overrides[get_limiter] = override_get_limiter
 
 @pytest.fixture(scope="function")
 def client():
-    Base.metadata.create_all(bind=engine)
+    # Создаем таблицы перед каждым тестом на тестовом engine
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
     yield TestClient(app)
-    Base.metadata.drop_all(bind=engine)
+    # Очищаем после теста
+    Base.metadata.drop_all(bind=test_engine)
 
 def test_register_user_success(client):
     """Тест успешной регистрации пользователя"""

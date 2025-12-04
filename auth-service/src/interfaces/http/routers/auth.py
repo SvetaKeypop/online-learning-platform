@@ -21,6 +21,18 @@ def get_limiter(request: Request) -> Limiter:
 def health():
     return {"status": "ok"}
 
+def _register_impl(
+    request: Request,
+    payload: RegisterReq,
+    db: Session,
+):
+    uc = RegisterUser(repo=UserRepository(db), hasher=PasswordHasher())
+    try:
+        user = uc.execute(payload.email, payload.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return UserResp(id=user.id, email=user.email, role=user.role)
+
 @router.post("/register", response_model=UserResp, status_code=status.HTTP_201_CREATED)
 def register(
     request: Request,
@@ -28,13 +40,21 @@ def register(
     db: Session = Depends(get_db),
     limiter: Limiter = Depends(get_limiter)
 ):
-    limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")(lambda: None)()
-    uc = RegisterUser(repo=UserRepository(db), hasher=PasswordHasher())
-    try:
-        user = uc.execute(payload.email, payload.password)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return UserResp(id=user.id, email=user.email, role=user.role)
+    # Применяем rate limiting через декоратор
+    limited_func = limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")(_register_impl)
+    return limited_func(request, payload, db)
+
+def _login_impl(
+    request: Request,
+    payload: LoginReq,
+    db: Session,
+):
+    row = db.query(UserORM).filter(UserORM.email == payload.email).first()
+    if not row or not PasswordHasher().verify(payload.password, row.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    # добавим роль в токен
+    token = create_access_token(sub=row.email, role=row.role)
+    return TokenResp(access_token=token)
 
 @router.post("/login", response_model=TokenResp)
 def login(
@@ -44,13 +64,8 @@ def login(
     limiter: Limiter = Depends(get_limiter)
 ):
     # Более строгий лимит для логина (защита от брутфорса)
-    limiter.limit("10/minute")(lambda: None)()
-    row = db.query(UserORM).filter(UserORM.email == payload.email).first()
-    if not row or not PasswordHasher().verify(payload.password, row.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    # добавим роль в токен
-    token = create_access_token(sub=row.email, role=row.role)
-    return TokenResp(access_token=token)
+    limited_func = limiter.limit("10/minute")(_login_impl)
+    return limited_func(request, payload, db)
 
 
 @router.get("/me", response_model=UserResp)
