@@ -6,9 +6,16 @@ services:
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     volumes:
-      - pgdata_auth:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
       - ../postgres-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     networks:
       - backend
     deploy:
@@ -17,34 +24,114 @@ services:
         max_replicas_per_node: 1
       restart_policy:
         condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        reservations:
+          memory: 128M
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
       resources:
         reservations:
           memory: 128M
 
   auth-service:
     image: nvzhn/coderror-auth-service:latest
+    ports:
+      - "8000:8000"
     environment:
       DATABASE_URL: postgresql://admin:password@postgres:5432/auth_db
+      REDIS_URL: redis://redis:6379/1
       SECRET_KEY: "super-secret-change-me"
       JWT_ALGORITHM: "HS256"
       ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      LOG_LEVEL: "INFO"
+      RATE_LIMIT_PER_MINUTE: "60"
+    command:
+      - sh
+      - -c
+      - |
+          python - <<'PY'
+          import os, sys, time
+          import psycopg2
+          url = os.environ['DATABASE_URL']
+          for _ in range(60):
+              try:
+                  psycopg2.connect(url).close()
+                  print("DB is up")
+                  break
+              except Exception as e:
+                  print("DB not ready:", e); time.sleep(2)
+          else:
+              sys.exit(1)
+          PY
+          uvicorn src.main:app --host 0.0.0.0 --port 8000
     networks:
       - backend
       - frontend
     deploy:
-      replicas: 2          # кластер из двух экземпляров
+      replicas: 2
       restart_policy:
         condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
       update_config:
         parallelism: 1
         order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
 
   courses-service:
-    image: nvzhn/coderror-courses-service:latest
+    image: nvzhn/coderror-courses-service:v5
+    ports:
+      - "8001:8000"
     environment:
       DATABASE_URL: postgresql://admin:password@postgres:5432/courses_db
+      REDIS_URL: redis://redis:6379/0
       SECRET_KEY: "super-secret-change-me"
       JWT_ALGORITHM: "HS256"
+      LOG_LEVEL: "INFO"
+    command:
+      - sh
+      - -c
+      - |
+          python - <<'PY'
+          import os, sys, time
+          import psycopg2
+          url = os.environ['DATABASE_URL']
+          for _ in range(60):
+              try:
+                  psycopg2.connect(url).close()
+                  print("DB is up")
+                  break
+              except Exception as e:
+                  print("DB not ready:", e); time.sleep(2)
+          else:
+              sys.exit(1)
+          PY
+          uvicorn src.main:app --host 0.0.0.0 --port 8000
     networks:
       - backend
       - frontend
@@ -52,16 +139,46 @@ services:
       replicas: 2
       restart_policy:
         condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
       update_config:
         parallelism: 1
         order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
 
   progress-service:
-    image: nvzhn/coderror-progress-service:latest
+    image: nvzhn/coderror-progress-service:v2
+    ports:
+      - "8002:8000"
     environment:
       DATABASE_URL: postgresql://admin:password@postgres:5432/progress_db
+      REDIS_URL: redis://redis:6379/2
       SECRET_KEY: "super-secret-change-me"
       JWT_ALGORITHM: "HS256"
+      LOG_LEVEL: "INFO"
+    command:
+      - sh
+      - -c
+      - |
+          python - <<'PY'
+          import os, sys, time
+          import psycopg2
+          url = os.environ['DATABASE_URL']
+          for _ in range(60):
+              try:
+                  psycopg2.connect(url).close()
+                  print("DB is up")
+                  break
+              except Exception as e:
+                  print("DB not ready:", e); time.sleep(2)
+          else:
+              sys.exit(1)
+          PY
+          uvicorn src.main:app --host 0.0.0.0 --port 8000
     networks:
       - backend
       - frontend
@@ -69,9 +186,16 @@ services:
       replicas: 2
       restart_policy:
         condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
       update_config:
         parallelism: 1
         order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
 
   frontend:
     image: nvzhn/coderror-frontend:latest
@@ -80,12 +204,19 @@ services:
     networks:
       - frontend
     deploy:
-      replicas: 2              # несколько экземпляров nginx
+      replicas: 1
       restart_policy:
         condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
       update_config:
-        parallelism: 2
+        parallelism: 1
         order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
 
 networks:
   backend:
@@ -94,4 +225,5 @@ networks:
     driver: overlay
 
 volumes:
-  pgdata_auth:
+  pgdata:
+  redisdata:

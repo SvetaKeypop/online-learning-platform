@@ -31,10 +31,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest httpx
+          pip install -r requirements.txt pytest pytest-cov pytest-asyncio httpx
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests with coverage
+        run: |
+          pytest -v --cov=src --cov-report=xml --cov-report=term-missing --tb=short
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: ${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+          fail_ci_if_error: false
 
   #Сборка и push образов на Docker Hub
   build-and-push:
@@ -69,6 +78,7 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/coderror-courses-service:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/coderror-courses-service:v5
 
       - name: Build and push progress-service
         uses: docker/build-push-action@v6
@@ -77,6 +87,7 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/coderror-progress-service:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/coderror-progress-service:v2
 
       - name: Build and push frontend
         uses: docker/build-push-action@v6
@@ -106,8 +117,8 @@ jobs:
         shell: powershell
         run: |
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-auth-service:latest
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-courses-service:latest
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-progress-service:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-courses-service:v5
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-progress-service:v2
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/coderror-frontend:latest
 
       - name: Deploy stack coderror

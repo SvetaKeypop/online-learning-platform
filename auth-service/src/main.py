@@ -1,16 +1,68 @@
-from fastapi import FastAPI
+import structlog
+from fastapi import FastAPI, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from .infrastructure.db import engine
 from .infrastructure.models import Base
 from .interfaces.http.routers import auth as auth_router
+from .config import settings
+
+# Настройка структурированного логирования
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.add_log_level,
+        structlog.processors.JSONRenderer()
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(
+        getattr(structlog.stdlib, settings.LOG_LEVEL.upper(), structlog.stdlib.INFO)
+    ),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
+logger = structlog.get_logger()
 
 app = FastAPI(title="Auth Service", version="0.1.0")
 
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Middleware для логирования
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    import time
+    start_time = time.time()
+    method = request.method
+    path = request.url.path
+    
+    response = await call_next(request)
+    
+    duration = time.time() - start_time
+    status_code = response.status_code
+    
+    logger.info(
+        "http_request",
+        method=method,
+        path=path,
+        status_code=status_code,
+        duration_ms=round(duration * 1000, 2)
+    )
+    
+    return response
+
 @app.on_event("startup")
 def on_startup():
+    logger.info("Starting auth service", version="0.1.0")
     Base.metadata.create_all(bind=engine)
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
+    logger.info("Database connection established")
 
 @app.get("/health")
 def health():

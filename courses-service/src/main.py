@@ -1,124 +1,88 @@
-from fastapi import FastAPI
-from sqlalchemy import text, select, insert
+import time
+import structlog
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
-from .infrastructure.db import engine, SessionLocal
+from .infrastructure.db import engine
 from .infrastructure.models import Base
+from .infrastructure.metrics import (
+    metrics_endpoint,
+    http_requests_total,
+    http_request_duration_seconds
+)
 from .interfaces.http.routers import courses as courses_router
+from .config import settings
+
+# Настройка структурированного логирования
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.add_log_level,
+        structlog.processors.JSONRenderer()
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(
+        getattr(structlog.stdlib, settings.LOG_LEVEL.upper(), structlog.stdlib.INFO)
+    ),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
+logger = structlog.get_logger()
 
 app = FastAPI(title="Courses Service", version="0.1.0")
 
-COURSES_DATA = [
-    {
-        "title": "Основы Python",
-        "description": "Базовый курс по Python для тех, кто только начинает программировать.",
-        "lessons": [
-            {
-                "title": "Установка Python и IDE",
-                "content": "Устанавливаем Python, выбираем IDE (PyCharm, VS Code).",
-            },
-            {
-                "title": "Первая программа",
-                "content": "Пишем 'Hello, world!' и запускаем скрипт из терминала.",
-            },
-            {
-                "title": "Переменные и типы данных",
-                "content": "int, float, str, bool, list, tuple, dict.",
-            },
-        ],
-    },
-    {
-        "title": "FastAPI для бэкенда",
-        "description": "Создание REST API на FastAPI: роуты, схемы, работа с БД.",
-        "lessons": [
-            {
-                "title": "Базовое приложение FastAPI",
-                "content": "Создаём приложение, разбираем роуты и Swagger UI.",
-            },
-            {
-                "title": "Модели и схемы",
-                "content": "Pydantic-схемы, запросы и ответы.",
-            },
-            {
-                "title": "Подключение к базе данных",
-                "content": "Настраиваем SQLAlchemy и зависимость get_db.",
-            },
-        ],
-    },
-    {
-        "title": "Git и GitHub для разработчика",
-        "description": "Практический курс по Git и работе с GitHub.",
-        "lessons": [
-            {
-                "title": "Базовые команды Git",
-                "content": "git init, status, add, commit.",
-            },
-            {
-                "title": "Удалённые репозитории",
-                "content": "git remote, push, pull, работа с GitHub.",
-            },
-            {
-                "title": "Ветки и pull-request’ы",
-                "content": "git branch, merge, создание PR.",
-            },
-        ],
-    },
-]
-
-
-def seed_demo_data() -> None:
-    meta = Base.metadata
-
-    if "courses" not in meta.tables:
-        return
-
-    courses_table = meta.tables["courses"]
-    lessons_table = meta.tables.get("lessons") 
-
-    db = SessionLocal()
-    try:
-        exists = db.execute(select(courses_table.c.id).limit(1)).first()
-        if exists:
-            return
-
-        for course_spec in COURSES_DATA:
-            result = db.execute(
-                insert(courses_table)
-                .values(
-                    title=course_spec["title"],
-                    description=course_spec["description"],
-                )
-                .returning(courses_table.c.id)
-            )
-            course_id = result.scalar_one()
-
-            if lessons_table is not None:
-                for lesson_spec in course_spec["lessons"]:
-                    db.execute(
-                        insert(lessons_table).values(
-                            course_id=course_id,
-                            title=lesson_spec["title"],
-                            content=lesson_spec["content"],
-                        )
-                    )
-
-        db.commit()
-    finally:
-        db.close()
+# Добавляем middleware для правильной кодировки и метрик
+@app.middleware("http")
+async def add_charset_header(request: Request, call_next):
+    start_time = time.time()
+    method = request.method
+    path = request.url.path
+    
+    response = await call_next(request)
+    
+    if response.headers.get("content-type", "").startswith("application/json"):
+        response.headers["content-type"] = "application/json; charset=utf-8"
+    
+    # Метрики
+    duration = time.time() - start_time
+    status_code = response.status_code
+    http_requests_total.labels(method=method, endpoint=path, status=status_code).inc()
+    http_request_duration_seconds.labels(method=method, endpoint=path).observe(duration)
+    
+    # Логирование
+    logger.info(
+        "http_request",
+        method=method,
+        path=path,
+        status_code=status_code,
+        duration_ms=round(duration * 1000, 2)
+    )
+    
+    return response
 
 
 @app.on_event("startup")
-def on_startup() -> None:
+def on_startup():
+    logger.info("Starting courses service", version="0.1.0")
     Base.metadata.create_all(bind=engine)
 
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
-
-    seed_demo_data()
+    logger.info("Database connection established")
 
 
 @app.get("/health")
-def health() -> dict:
+def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus metrics endpoint"""
+    return metrics_endpoint()
 
 
 app.include_router(courses_router.router)
