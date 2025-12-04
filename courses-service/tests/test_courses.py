@@ -130,10 +130,19 @@ def test_get_course_lessons_empty(client, mock_db):
     mock_query_lesson.all.return_value = []
     
     def query_side_effect(model):
-        if model == Course:
+        # Используем is для сравнения классов, чтобы избежать проблем с SQLAlchemy
+        if model is Course:
             return mock_query_course
-        elif model == Lesson:
+        elif model is Lesson:
             return mock_query_lesson
+        # Для db.query(Course.id) - проверяем, является ли это Column объектом
+        # SQLAlchemy Column имеет атрибут 'key' или 'property'
+        if hasattr(model, 'key') or (hasattr(model, 'property') and hasattr(model.property, 'key')):
+            # Это атрибут модели, например Course.id
+            mock_attr_query = MagicMock()
+            mock_attr_query.filter.return_value = mock_attr_query
+            mock_attr_query.first.return_value = 1  # Возвращаем id курса
+            return mock_attr_query
         return MagicMock()
     
     mock_db.query.side_effect = query_side_effect
