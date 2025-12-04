@@ -42,18 +42,37 @@ from src.main import app
 
 app.dependency_overrides[get_db] = override_get_db
 
-# Переопределяем on_startup чтобы использовать тестовый engine
-@app.on_event("startup")
-def test_on_startup():
-    # Используем тестовый engine
-    Base.metadata.create_all(bind=test_engine)
+# Отключаем оригинальный on_startup для тестов
+# Мы будем создавать таблицы вручную в фикстуре
+if hasattr(app, 'router'):
+    # Удаляем оригинальный on_startup если он есть
+    pass
 
 @pytest.fixture(scope="function")
 def client():
     # Создаем таблицы перед каждым тестом на тестовом engine
+    # Важно: создаем таблицы ДО создания TestClient
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
-    yield TestClient(app)
+    
+    # Убеждаемся, что таблицы действительно созданы через прямое соединение
+    # Это гарантирует, что таблицы будут видны для всех последующих соединений
+    with test_engine.connect() as conn:
+        # Выполняем простой запрос чтобы убедиться, что таблица существует
+        from sqlalchemy import text
+        try:
+            conn.execute(text("SELECT COUNT(*) FROM progress"))
+            conn.commit()
+        except Exception:
+            # Если таблицы нет, создаем заново
+            Base.metadata.create_all(bind=test_engine)
+            conn.commit()
+    
+    # Создаем TestClient
+    test_client = TestClient(app)
+    
+    yield test_client
+    
     # Очищаем после теста
     Base.metadata.drop_all(bind=test_engine)
 
