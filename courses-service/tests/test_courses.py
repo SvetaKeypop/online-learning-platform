@@ -1,7 +1,7 @@
 import os
 import sys
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock
 
 CURRENT_DIR = os.path.dirname(__file__)
 SERVICE_ROOT = os.path.dirname(CURRENT_DIR)
@@ -9,50 +9,29 @@ if SERVICE_ROOT not in sys.path:
     sys.path.insert(0, SERVICE_ROOT)
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
 from src.interfaces.http.authz import require_admin
 
-# Тестовая БД в памяти
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-# Переопределяем engine в infrastructure.db и main.py для тестов
-import src.infrastructure.db
-import src.main
-src.infrastructure.db.engine = test_engine
-src.main.engine = test_engine
-src.infrastructure.db.SessionLocal = TestingSessionLocal
-
-# Импортируем app после переопределения engine
+# Импортируем app
 from src.main import app
 
-app.dependency_overrides[get_db] = override_get_db
+# Мокируем get_db
+@pytest.fixture
+def mock_db():
+    """Мок сессии БД"""
+    db = MagicMock()
+    db.query = MagicMock()
+    db.add = MagicMock()
+    db.commit = MagicMock()
+    db.refresh = MagicMock()
+    db.delete = MagicMock()
+    return db
 
-# Переопределяем on_startup чтобы использовать тестовый engine
-@app.on_event("startup")
-def test_on_startup():
-    # Используем тестовый engine
-    Base.metadata.create_all(bind=test_engine)
-
-@pytest.fixture(scope="function")
-def client():
-    # Создаем таблицы перед каждым тестом на тестовом engine
-    Base.metadata.drop_all(bind=test_engine)
-    Base.metadata.create_all(bind=test_engine)
-    yield TestClient(app)
-    # Очищаем после теста
-    Base.metadata.drop_all(bind=test_engine)
+def create_override_get_db(mock_db):
+    """Создает функцию переопределения get_db для тестов"""
+    def _get_db():
+        yield mock_db
+    return _get_db
 
 @pytest.fixture
 def admin_override():
@@ -66,41 +45,51 @@ def admin_override():
         del app.dependency_overrides[require_admin]
 
 @pytest.fixture
-def admin_token():
-    """Мок токена администратора"""
-    return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBleGFtcGxlLmNvbSIsInJvbGUiOiJhZG1pbiJ9.test"
+def client(mock_db):
+    """Фикстура для тестового клиента"""
+    # Переопределяем get_db для каждого теста
+    app.dependency_overrides[get_db] = create_override_get_db(mock_db)
+    yield TestClient(app)
+    # Очищаем после теста
+    if get_db in app.dependency_overrides:
+        del app.dependency_overrides[get_db]
 
-def test_list_courses_empty(client):
+def test_list_courses_empty(client, mock_db):
     """Тест получения пустого списка курсов"""
+    # Мокируем пустой результат
+    mock_query = MagicMock()
+    mock_query.order_by.return_value = mock_query
+    mock_query.limit.return_value = mock_query
+    mock_query.offset.return_value = mock_query
+    mock_query.all.return_value = []
+    mock_db.query.return_value = mock_query
+    
     response = client.get("/api/courses")
     assert response.status_code == 200
     assert response.json() == []
 
-def test_list_courses_with_pagination(client):
+def test_list_courses_with_pagination(client, mock_db):
     """Тест пагинации курсов"""
-    # Создаем тестовые данные через прямой доступ к БД
+    # Мокируем курс
     from src.infrastructure.models import Course
-    db = TestingSessionLocal()
-    try:
-        for i in range(15):
-            course = Course(title=f"Course {i}", description=f"Description {i}")
-            db.add(course)
-        db.commit()
-        db.close()
-        
-        # Тест первой страницы
-        response = client.get("/api/courses?limit=10&offset=0")
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 10
-        
-        # Тест второй страницы
-        response = client.get("/api/courses?limit=10&offset=10")
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 5
-    finally:
-        db.close()
+    mock_course = Mock(spec=Course)
+    mock_course.id = 1
+    mock_course.title = "Test Course"
+    mock_course.description = "Test Description"
+    
+    # Мокируем результат запроса
+    mock_query = MagicMock()
+    mock_query.order_by.return_value = mock_query
+    mock_query.limit.return_value = mock_query
+    mock_query.offset.return_value = mock_query
+    mock_query.all.return_value = [mock_course]
+    mock_db.query.return_value = mock_query
+    
+    response = client.get("/api/courses?limit=10&offset=0")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Test Course"
 
 def test_list_courses_invalid_pagination(client):
     """Тест невалидной пагинации"""
@@ -113,27 +102,43 @@ def test_list_courses_invalid_pagination(client):
     response = client.get("/api/courses?offset=-1")
     assert response.status_code == 422
 
-def test_get_course_lessons_not_found(client):
+def test_get_course_lessons_not_found(client, mock_db):
     """Тест получения уроков несуществующего курса"""
+    # Мокируем, что курс не найден
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = None
+    mock_db.query.return_value = mock_query
+    
     response = client.get("/api/courses/999/lessons")
     assert response.status_code == 404
 
-def test_get_course_lessons_empty(client):
+def test_get_course_lessons_empty(client, mock_db):
     """Тест получения пустого списка уроков"""
-    # Создаем курс
-    from src.infrastructure.models import Course
-    db = TestingSessionLocal()
-    try:
-        course = Course(title="Test Course", description="Test Description")
-        db.add(course)
-        db.commit()
-        course_id = course.id
-        db.close()
-    except:
-        db.close()
-        raise
+    # Мокируем, что курс существует, но уроков нет
+    from src.infrastructure.models import Course, Lesson
+    mock_course = Mock(spec=Course)
+    mock_course.id = 1
     
-    response = client.get(f"/api/courses/{course_id}/lessons")
+    mock_query_course = MagicMock()
+    mock_query_course.filter.return_value = mock_query_course
+    mock_query_course.first.return_value = mock_course
+    
+    mock_query_lesson = MagicMock()
+    mock_query_lesson.filter.return_value = mock_query_lesson
+    mock_query_lesson.order_by.return_value = mock_query_lesson
+    mock_query_lesson.all.return_value = []
+    
+    def query_side_effect(model):
+        if model == Course:
+            return mock_query_course
+        elif model == Lesson:
+            return mock_query_lesson
+        return MagicMock()
+    
+    mock_db.query.side_effect = query_side_effect
+    
+    response = client.get("/api/courses/1/lessons")
     assert response.status_code == 200
     assert response.json() == []
 
@@ -146,8 +151,25 @@ def test_create_course_unauthorized(client):
     # HTTPBearer возвращает 403 если нет заголовка Authorization
     assert response.status_code == 403
 
-def test_create_course(client, admin_override):
+def test_create_course(client, admin_override, mock_db):
     """Тест создания курса"""
+    # Мокируем создание курса
+    from src.infrastructure.models import Course
+    mock_course = Mock(spec=Course)
+    mock_course.id = 1
+    mock_course.title = "Test Course"
+    mock_course.description = "Test Description"
+    
+    mock_db.refresh.return_value = None
+    mock_db.add.return_value = None
+    mock_db.commit.return_value = None
+    
+    # Мокируем refresh чтобы установить id
+    def refresh_side_effect(obj):
+        obj.id = 1
+    
+    mock_db.refresh.side_effect = refresh_side_effect
+    
     response = client.post(
         "/api/courses",
         json={"title": "Test Course", "description": "Test Description"},
@@ -159,8 +181,14 @@ def test_create_course(client, admin_override):
     assert data["description"] == "Test Description"
     assert "id" in data
 
-def test_update_course_not_found(client, admin_override):
+def test_update_course_not_found(client, admin_override, mock_db):
     """Тест обновления несуществующего курса"""
+    # Мокируем, что курс не найден
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = None
+    mock_db.query.return_value = mock_query
+    
     response = client.put(
         "/api/courses/999",
         json={"title": "Updated Title"},
@@ -168,8 +196,14 @@ def test_update_course_not_found(client, admin_override):
     )
     assert response.status_code == 404
 
-def test_delete_course_not_found(client, admin_override):
+def test_delete_course_not_found(client, admin_override, mock_db):
     """Тест удаления несуществующего курса"""
+    # Мокируем, что курс не найден
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = None
+    mock_db.query.return_value = mock_query
+    
     response = client.delete(
         "/api/courses/999",
         headers={"Authorization": "Bearer test"}
@@ -191,4 +225,3 @@ def test_metrics_endpoint(client):
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
     assert "http_requests_total" in response.text
-

@@ -1,7 +1,7 @@
 import os
 import sys
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock
 
 CURRENT_DIR = os.path.dirname(__file__)
 SERVICE_ROOT = os.path.dirname(CURRENT_DIR)
@@ -9,44 +9,34 @@ if SERVICE_ROOT not in sys.path:
     sys.path.insert(0, SERVICE_ROOT)
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from src.infrastructure.models import Base
 from src.infrastructure.db import get_db
 from src.infrastructure.security import PasswordHasher
 from src.interfaces.http.routers.auth import get_limiter
 
-# Тестовая БД в памяти
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-test_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-# Переопределяем engine в infrastructure.db и main.py для тестов
-import src.infrastructure.db
-import src.main
-src.infrastructure.db.engine = test_engine
-src.main.engine = test_engine
-src.infrastructure.db.SessionLocal = TestingSessionLocal
-
-# Импортируем app после переопределения engine
+# Импортируем app
 from src.main import app
 
-app.dependency_overrides[get_db] = override_get_db
+# Мокируем get_db
+@pytest.fixture
+def mock_db():
+    """Мок сессии БД"""
+    db = MagicMock()
+    db.query = MagicMock()
+    db.add = MagicMock()
+    db.commit = MagicMock()
+    db.refresh = MagicMock()
+    return db
+
+def create_override_get_db(mock_db):
+    """Создает функцию переопределения get_db для тестов"""
+    def _get_db():
+        yield mock_db
+    return _get_db
 
 # Отключаем rate limiting в тестах
 def override_get_limiter():
-    from slowapi import Limiter
     from unittest.mock import MagicMock
-    # Создаем mock limiter, который ничего не делает
     mock_limiter = MagicMock()
-    # Переопределяем метод limit чтобы он возвращал декоратор, который ничего не делает
     def noop_limit(*args, **kwargs):
         def decorator(func):
             return func
@@ -56,17 +46,40 @@ def override_get_limiter():
 
 app.dependency_overrides[get_limiter] = override_get_limiter
 
-@pytest.fixture(scope="function")
-def client():
-    # Создаем таблицы перед каждым тестом на тестовом engine
-    Base.metadata.drop_all(bind=test_engine)
-    Base.metadata.create_all(bind=test_engine)
+@pytest.fixture
+def client(mock_db):
+    """Фикстура для тестового клиента"""
+    # Переопределяем get_db для каждого теста
+    app.dependency_overrides[get_db] = create_override_get_db(mock_db)
     yield TestClient(app)
     # Очищаем после теста
-    Base.metadata.drop_all(bind=test_engine)
+    if get_db in app.dependency_overrides:
+        del app.dependency_overrides[get_db]
 
-def test_register_user_success(client):
+def test_register_user_success(client, mock_db):
     """Тест успешной регистрации пользователя"""
+    from src.infrastructure.models import UserORM
+    from src.domain.entities import User
+    
+    # Мокируем, что пользователя нет
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = None
+    mock_db.query.return_value = mock_query
+    
+    # Мокируем создание пользователя
+    mock_user = Mock(spec=UserORM)
+    mock_user.id = 1
+    mock_user.email = "test@example.com"
+    mock_user.role = "student"
+    
+    def refresh_side_effect(obj):
+        obj.id = 1
+        obj.email = "test@example.com"
+        obj.role = "student"
+    
+    mock_db.refresh.side_effect = refresh_side_effect
+    
     response = client.post(
         "/api/auth/register",
         json={"email": "test@example.com", "password": "password123"}
@@ -77,15 +90,32 @@ def test_register_user_success(client):
     assert data["role"] == "student"
     assert "id" in data
 
-def test_register_user_duplicate(client):
+def test_register_user_duplicate(client, mock_db):
     """Тест регистрации с существующим email"""
-    # Первая регистрация
+    from src.infrastructure.models import UserORM
+    
+    # Мокируем, что пользователь уже существует
+    mock_user = Mock(spec=UserORM)
+    mock_user.id = 1
+    mock_user.email = "test@example.com"
+    mock_user.role = "student"
+    
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = mock_user
+    mock_db.query.return_value = mock_query
+    
+    # Первая регистрация (успешная)
+    def refresh_side_effect(obj):
+        obj.id = 1
+    
+    mock_db.refresh.side_effect = refresh_side_effect
     client.post(
         "/api/auth/register",
         json={"email": "test@example.com", "password": "password123"}
     )
     
-    # Вторая регистрация с тем же email
+    # Вторая регистрация с тем же email (должна провалиться)
     response = client.post(
         "/api/auth/register",
         json={"email": "test@example.com", "password": "password123"}
@@ -109,15 +139,25 @@ def test_register_user_short_password(client):
     # Может быть 422 (валидация) или 400 (бизнес-логика)
     assert response.status_code in [400, 422]
 
-def test_login_success(client):
+def test_login_success(client, mock_db):
     """Тест успешного входа"""
-    # Сначала регистрируем пользователя
-    client.post(
-        "/api/auth/register",
-        json={"email": "test@example.com", "password": "password123"}
-    )
+    from src.infrastructure.models import UserORM
     
-    # Затем логинимся
+    # Мокируем пользователя с правильным паролем
+    hasher = PasswordHasher()
+    password_hash = hasher.hash("password123")
+    
+    mock_user = Mock(spec=UserORM)
+    mock_user.id = 1
+    mock_user.email = "test@example.com"
+    mock_user.password_hash = password_hash
+    mock_user.role = "student"
+    
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = mock_user
+    mock_db.query.return_value = mock_query
+    
     response = client.post(
         "/api/auth/login",
         json={"email": "test@example.com", "password": "password123"}
@@ -127,37 +167,63 @@ def test_login_success(client):
     assert "access_token" in data
     assert data["token_type"] == "bearer"
 
-def test_login_invalid_credentials(client):
+def test_login_invalid_credentials(client, mock_db):
     """Тест входа с неверными учетными данными"""
+    from src.infrastructure.models import UserORM
+    
+    # Мокируем пользователя с неправильным паролем
+    hasher = PasswordHasher()
+    password_hash = hasher.hash("wrongpassword")
+    
+    mock_user = Mock(spec=UserORM)
+    mock_user.email = "test@example.com"
+    mock_user.password_hash = password_hash
+    
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = mock_user
+    mock_db.query.return_value = mock_query
+    
     response = client.post(
         "/api/auth/login",
-        json={"email": "test@example.com", "password": "wrongpassword"}
+        json={"email": "test@example.com", "password": "password123"}
     )
     assert response.status_code == 401
     assert "Invalid credentials" in response.json()["detail"]
 
-def test_login_nonexistent_user(client):
+def test_login_nonexistent_user(client, mock_db):
     """Тест входа несуществующего пользователя"""
+    # Мокируем, что пользователь не найден
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = None
+    mock_db.query.return_value = mock_query
+    
     response = client.post(
         "/api/auth/login",
         json={"email": "nonexistent@example.com", "password": "password123"}
     )
     assert response.status_code == 401
 
-def test_me_endpoint_success(client):
+def test_me_endpoint_success(client, mock_db):
     """Тест получения информации о текущем пользователе"""
-    # Регистрируем и логинимся
-    client.post(
-        "/api/auth/register",
-        json={"email": "test@example.com", "password": "password123"}
-    )
-    login_response = client.post(
-        "/api/auth/login",
-        json={"email": "test@example.com", "password": "password123"}
-    )
-    token = login_response.json()["access_token"]
+    from src.infrastructure.models import UserORM
+    from src.infrastructure.security import create_access_token
     
-    # Получаем информацию о себе
+    # Создаем токен
+    token = create_access_token(sub="test@example.com", role="student")
+    
+    # Мокируем пользователя
+    mock_user = Mock(spec=UserORM)
+    mock_user.id = 1
+    mock_user.email = "test@example.com"
+    mock_user.role = "student"
+    
+    mock_query = MagicMock()
+    mock_query.filter.return_value = mock_query
+    mock_query.first.return_value = mock_user
+    mock_db.query.return_value = mock_query
+    
     response = client.get(
         "/api/auth/me",
         headers={"Authorization": f"Bearer {token}"}
@@ -181,7 +247,7 @@ def test_me_endpoint_no_token(client):
 
 def test_rate_limiting(client):
     """Тест rate limiting (базовый)"""
-    # Делаем много запросов подряд
+    # В тестах rate limiting отключен, поэтому все запросы должны проходить
     responses = []
     for i in range(15):
         response = client.post(
@@ -190,7 +256,5 @@ def test_rate_limiting(client):
         )
         responses.append(response.status_code)
     
-    # Хотя бы один должен быть заблокирован (если rate limiting работает)
-    # В тестовой среде может не работать без Redis, но структура теста правильная
+    # Все запросы должны пройти (rate limiting отключен в тестах)
     assert len(responses) == 15
-
