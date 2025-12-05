@@ -144,10 +144,16 @@ def test_full_course_lifecycle(client, admin_override, mock_db):
     mock_query_lessons.all.return_value = [mock_lesson, mock_lesson2]
     
     def query_lessons_side_effect(model):
-        if model == Course:
+        if model is Course:
             return mock_query_course_check
-        elif model == Lesson:
+        elif model is Lesson:
             return mock_query_lessons
+        # Для db.query(Course.id) - проверяем, является ли это Column объектом
+        if hasattr(model, 'key') or (hasattr(model, 'property') and hasattr(model.property, 'key')):
+            mock_attr_query = MagicMock()
+            mock_attr_query.filter.return_value = mock_attr_query
+            mock_attr_query.first.return_value = 1
+            return mock_attr_query
         return MagicMock()
     
     mock_db.query.side_effect = query_lessons_side_effect
