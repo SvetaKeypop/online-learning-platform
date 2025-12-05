@@ -130,9 +130,10 @@ def test_full_auth_flow(client, mock_db):
     token = token_data["access_token"]
     
     # 4. Логин с неправильным паролем
+    # Устанавливаем password_hash для правильного пароля, но пытаемся войти с неправильным
     mock_user_wrong = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
     mock_user_wrong.email = email  # Реальная строка
-    mock_user_wrong.password_hash = hasher.hash("wrongpassword")  # Реальная строка
+    mock_user_wrong.password_hash = password_hash  # Хеш правильного пароля
     mock_user_wrong.role = "student"  # Реальная строка
     
     mock_query_wrong = MagicMock()
@@ -142,7 +143,7 @@ def test_full_auth_flow(client, mock_db):
     
     wrong_password_response = client.post(
         "/api/auth/login",
-        json={"email": email, "password": "wrongpassword"}
+        json={"email": email, "password": "wrongpassword"}  # Неправильный пароль
     )
     assert wrong_password_response.status_code == 401
     
