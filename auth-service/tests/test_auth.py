@@ -95,10 +95,10 @@ def test_register_user_duplicate(client, mock_db):
     from src.infrastructure.models import UserORM
     
     # Мокируем, что пользователь уже существует
-    mock_user = Mock(spec=UserORM)
+    mock_user = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
     mock_user.id = 1
-    mock_user.email = "test@example.com"
-    mock_user.role = "student"
+    mock_user.email = "test@example.com"  # Реальная строка
+    mock_user.role = "student"  # Реальная строка
     
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -147,11 +147,12 @@ def test_login_success(client, mock_db):
     hasher = PasswordHasher()
     password_hash = hasher.hash("password123")
     
-    mock_user = Mock(spec=UserORM)
+    # Используем Mock() без spec, чтобы избежать автоматического создания дочерних Mock объектов
+    mock_user = Mock()
     mock_user.id = 1
-    mock_user.email = "test@example.com"
-    mock_user.password_hash = password_hash
-    mock_user.role = "student"
+    mock_user.email = "test@example.com"  # Реальная строка
+    mock_user.password_hash = password_hash  # Реальная строка
+    mock_user.role = "student"  # Реальная строка
     
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -175,9 +176,10 @@ def test_login_invalid_credentials(client, mock_db):
     hasher = PasswordHasher()
     password_hash = hasher.hash("wrongpassword")
     
-    mock_user = Mock(spec=UserORM)
-    mock_user.email = "test@example.com"
-    mock_user.password_hash = password_hash
+    mock_user = Mock()
+    mock_user.email = "test@example.com"  # Реальная строка
+    mock_user.password_hash = password_hash  # Реальная строка
+    mock_user.role = "student"  # Реальная строка
     
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -214,10 +216,10 @@ def test_me_endpoint_success(client, mock_db):
     token = create_access_token(sub="test@example.com", role="student")
     
     # Мокируем пользователя
-    mock_user = Mock(spec=UserORM)
+    mock_user = Mock()
     mock_user.id = 1
-    mock_user.email = "test@example.com"
-    mock_user.role = "student"
+    mock_user.email = "test@example.com"  # Реальная строка
+    mock_user.role = "student"  # Реальная строка
     
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -245,14 +247,34 @@ def test_me_endpoint_no_token(client):
     response = client.get("/api/auth/me")
     assert response.status_code == 403
 
-def test_rate_limiting(client):
+def test_rate_limiting(client, mock_db):
     """Тест rate limiting (базовый)"""
+    from src.infrastructure.models import UserORM
+    
     # В тестах rate limiting отключен, поэтому все запросы должны проходить
+    # Но нужно замокировать пользователей, чтобы не было ошибок
+    hasher = PasswordHasher()
+    
     responses = []
     for i in range(15):
+        email = f"test{i}@example.com"
+        password = "password123"
+        
+        # Мокируем пользователя для каждого запроса
+        password_hash = hasher.hash(password)
+        mock_user = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
+        mock_user.email = email  # Реальная строка
+        mock_user.password_hash = password_hash  # Реальная строка
+        mock_user.role = "student"  # Реальная строка
+        
+        mock_query = MagicMock()
+        mock_query.filter.return_value = mock_query
+        mock_query.first.return_value = mock_user
+        mock_db.query.return_value = mock_query
+        
         response = client.post(
             "/api/auth/login",
-            json={"email": f"test{i}@example.com", "password": "password123"}
+            json={"email": email, "password": password}
         )
         responses.append(response.status_code)
     

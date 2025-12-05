@@ -89,10 +89,10 @@ def test_full_auth_flow(client, mock_db):
     user_id = user_data["id"]
     
     # Настройка моков для повторной регистрации
-    mock_user = Mock(spec=UserORM)
+    mock_user = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
     mock_user.id = user_id
-    mock_user.email = email
-    mock_user.role = "student"
+    mock_user.email = email  # Реальная строка
+    mock_user.role = "student"  # Реальная строка
     
     mock_query_duplicate = MagicMock()
     mock_query_duplicate.filter.return_value = mock_query_duplicate
@@ -108,11 +108,11 @@ def test_full_auth_flow(client, mock_db):
     
     # Настройка моков для логина
     password_hash = hasher.hash(password)
-    mock_user_login = Mock(spec=UserORM)
+    mock_user_login = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
     mock_user_login.id = user_id
-    mock_user_login.email = email
-    mock_user_login.password_hash = password_hash
-    mock_user_login.role = "student"
+    mock_user_login.email = email  # Реальная строка
+    mock_user_login.password_hash = password_hash  # Реальная строка
+    mock_user_login.role = "student"  # Реальная строка
     
     mock_query_login = MagicMock()
     mock_query_login.filter.return_value = mock_query_login
@@ -130,9 +130,10 @@ def test_full_auth_flow(client, mock_db):
     token = token_data["access_token"]
     
     # 4. Логин с неправильным паролем
-    mock_user_wrong = Mock(spec=UserORM)
-    mock_user_wrong.email = email
-    mock_user_wrong.password_hash = hasher.hash("wrongpassword")
+    mock_user_wrong = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
+    mock_user_wrong.email = email  # Реальная строка
+    mock_user_wrong.password_hash = hasher.hash("wrongpassword")  # Реальная строка
+    mock_user_wrong.role = "student"  # Реальная строка
     
     mock_query_wrong = MagicMock()
     mock_query_wrong.filter.return_value = mock_query_wrong
@@ -204,11 +205,11 @@ def test_multiple_users(client, mock_db):
         
         # Настройка моков для логина
         password_hash = hasher.hash(password)
-        mock_user = Mock(spec=UserORM)
+        mock_user = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
         mock_user.id = i + 1
-        mock_user.email = email
-        mock_user.password_hash = password_hash
-        mock_user.role = "student"
+        mock_user.email = email  # Реальная строка
+        mock_user.password_hash = password_hash  # Реальная строка
+        mock_user.role = "student"  # Реальная строка
         
         mock_query_login = MagicMock()
         mock_query_login.filter.return_value = mock_query_login
@@ -226,10 +227,10 @@ def test_multiple_users(client, mock_db):
     
     # Проверяем, что все пользователи могут получить свою информацию
     for i, user in enumerate(users):
-        mock_user_me = Mock(spec=UserORM)
+        mock_user_me = Mock()  # Без spec, чтобы избежать автоматических Mock объектов
         mock_user_me.id = i + 1
-        mock_user_me.email = user["email"]
-        mock_user_me.role = "student"
+        mock_user_me.email = user["email"]  # Реальная строка
+        mock_user_me.role = "student"  # Реальная строка
         
         mock_query_me = MagicMock()
         mock_query_me.filter.return_value = mock_query_me
